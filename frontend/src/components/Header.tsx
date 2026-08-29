@@ -5,7 +5,7 @@
  import { SupportedLanguage, UserRole } from '../types';
  
  export const Header = ({ onOpenAuth }: { onOpenAuth: () => void }) => {
-   const { user, role, language, setLanguage, switchDemoUser, t } = useApp();
+   const { user, role, language, setLanguage, switchDemoUser, logout, t } = useApp();
    const [langModalVisible, setLangModalVisible] = useState(false);
    const [roleModalVisible, setRoleModalVisible] = useState(false);
  
@@ -144,6 +144,20 @@
                <Ionicons name="key-outline" size={18} color="#385A49" />
                <Text style={styles.loginModalButtonText}>Passwordless Mobile Login (OTP)</Text>
              </TouchableOpacity>
+
+             {user?.email ? (
+               <TouchableOpacity
+                 style={styles.signOutButton}
+                 testID="sign-out-button"
+                 onPress={() => {
+                   setRoleModalVisible(false);
+                   logout();
+                 }}
+               >
+                 <Ionicons name="log-out-outline" size={18} color="#BA3C3C" />
+                 <Text style={styles.signOutButtonText}>Sign Out ({user.email})</Text>
+               </TouchableOpacity>
+             ) : null}
            </View>
          </View>
        </Modal>
@@ -307,5 +321,21 @@
      fontSize: 14,
      fontWeight: '600',
      color: '#385A49'
+   },
+   signOutButton: {
+     marginTop: 8,
+     paddingVertical: 12,
+     borderRadius: 12,
+     backgroundColor: '#FDE8E8',
+     flexDirection: 'row',
+     justifyContent: 'center',
+     alignItems: 'center',
+     gap: 8,
+     minHeight: 48
+   },
+   signOutButtonText: {
+     fontSize: 13,
+     fontWeight: '700',
+     color: '#BA3C3C'
    }
  });

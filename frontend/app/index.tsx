@@ -23,6 +23,7 @@ import { PharmacistPortal } from '../src/components/PharmacistPortal';
 import { ClinicDoctorDashboard } from '../src/components/ClinicDoctorDashboard';
 import { PasswordlessAuthModal } from '../src/components/PasswordlessAuthModal';
 import { GuidedPermissionModal } from '../src/components/GuidedPermissionModal';
+import { RoleSelectionModal } from '../src/components/RoleSelectionModal';
 
 type TabType = 'today' | 'scanner' | 'education' | 'safety' | 'caregiver' | 'refills' | 'clinic';
 
@@ -280,6 +281,8 @@ function MainAppScreen() {
         onGrant={() => setPermVisible(false)}
         onDismiss={() => setPermVisible(false)}
       />
+
+      <RoleSelectionModal />
     </SafeAreaView>
   );
 }

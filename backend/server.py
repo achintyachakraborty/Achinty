@@ -10,7 +10,8 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timezone, timedelta
 
 import requests
-from fastapi import FastAPI, APIRouter, HTTPException, Query, Body
+import httpx
+from fastapi import FastAPI, APIRouter, HTTPException, Query, Body, Header
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -335,6 +336,13 @@ class DispatchAlertRequest(BaseModel):
 class InteractionCheckRequest(BaseModel):
     medication_names: List[str]
     rxcuis: Optional[List[str]] = []
+
+class SessionRequest(BaseModel):
+    session_id: str
+
+class SelectRoleRequest(BaseModel):
+    role: str
+    language: Optional[str] = None
 
 class ManualMedicationCreate(BaseModel):
     patient_id: str
@@ -766,7 +774,12 @@ async def get_demo_users():
     return {"users": serialize_docs(users)}
 
 @api_router.get("/auth/me")
-async def get_current_user(user_id: Optional[str] = Query(None), phone: Optional[str] = Query(None)):
+async def get_current_user(user_id: Optional[str] = Query(None), phone: Optional[str] = Query(None), authorization: Optional[str] = Header(None)):
+    # Prefer Bearer-token (Google session) auth when present
+    token_user = await get_user_from_token(authorization)
+    if token_user:
+        return {"user": serialize_doc(token_user)}
+
     query = {}
     if user_id:
         query["_id"] = user_id
@@ -792,6 +805,131 @@ async def update_profile(user_id: str = Query(...), update_data: UserProfileUpda
     await db.users.update_one({"_id": user_id}, {"$set": update_dict})
     updated = await db.users.find_one({"_id": user_id})
     return {"success": True, "user": serialize_doc(updated)}
+
+# --- Emergent-managed Google Auth (session-based) ---
+EMERGENT_AUTH_SESSION_URL = "https://demobackend.emergentagent.com/auth/v1/env/oauth/session-data"
+
+@app.on_event("startup")
+async def create_auth_indexes():
+    try:
+        await db.users.create_index("email", unique=True, sparse=True)
+        await db.user_sessions.create_index("session_token", unique=True)
+        await db.user_sessions.create_index("user_id")
+        await db.user_sessions.create_index("expires_at", expireAfterSeconds=0)
+        logger.info("Auth indexes ensured.")
+    except Exception as idx_err:
+        logger.warning(f"Auth index creation skipped: {idx_err}")
+
+async def get_user_from_token(authorization: Optional[str]) -> Optional[Dict[str, Any]]:
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    token = authorization.split(" ", 1)[1].strip()
+    if not token:
+        return None
+    session = await db.user_sessions.find_one({"session_token": token})
+    if not session:
+        return None
+    expires_at = session.get("expires_at")
+    if isinstance(expires_at, str):
+        try:
+            expires_at = datetime.fromisoformat(expires_at)
+        except ValueError:
+            expires_at = None
+    if expires_at is not None:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at < datetime.now(timezone.utc):
+            return None
+    user = await db.users.find_one({"_id": session.get("user_id")})
+    return user
+
+@api_router.post("/auth/session")
+async def create_auth_session(payload: SessionRequest):
+    session_id = payload.session_id.strip()
+    if not session_id:
+        raise HTTPException(status_code=400, detail="session_id is required")
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as http_client:
+            resp = await http_client.get(
+                EMERGENT_AUTH_SESSION_URL,
+                headers={"X-Session-ID": session_id}
+            )
+    except Exception as e:
+        logger.error(f"Emergent auth session-data call failed: {e}")
+        raise HTTPException(status_code=401, detail="Authentication failed")
+
+    if resp.status_code != 200:
+        raise HTTPException(status_code=401, detail="Invalid or expired session")
+
+    data = resp.json()
+    email = data.get("email")
+    name = data.get("name") or (email.split("@")[0] if email else "Google User")
+    picture = data.get("picture")
+    session_token = data.get("session_token")
+    if not email or not session_token:
+        raise HTTPException(status_code=401, detail="Incomplete session data")
+
+    now = datetime.now(timezone.utc)
+    existing = await db.users.find_one({"email": email})
+    if existing:
+        user_id = existing["_id"]
+        await db.users.update_one(
+            {"_id": user_id},
+            {"$set": {"name": name, "picture": picture, "last_login": now.isoformat()}}
+        )
+        user = await db.users.find_one({"_id": user_id})
+    else:
+        user_id = f"user_{uuid.uuid4().hex[:12]}"
+        user = {
+            "_id": user_id,
+            "id": user_id,
+            "email": email,
+            "name": name,
+            "picture": picture,
+            "role": "patient",
+            "role_selected": False,
+            "language": "en",
+            "auth_provider": "google",
+            "emergency_contacts": [],
+            "created_at": now.isoformat(),
+            "last_login": now.isoformat()
+        }
+        await db.users.insert_one(user)
+
+    expires_at = now + timedelta(days=7)
+    await db.user_sessions.insert_one({
+        "_id": str(uuid.uuid4()),
+        "session_token": session_token,
+        "user_id": user_id,
+        "created_at": now.isoformat(),
+        "expires_at": expires_at
+    })
+
+    return {"session_token": session_token, "user": serialize_doc(user)}
+
+@api_router.post("/auth/select-role")
+async def select_role(payload: SelectRoleRequest, authorization: Optional[str] = Header(None)):
+    user = await get_user_from_token(authorization)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if payload.role not in ["patient", "caregiver", "pharmacist", "clinic"]:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    update_fields = {"role": payload.role, "role_selected": True}
+    if payload.language:
+        update_fields["language"] = payload.language
+    await db.users.update_one({"_id": user["_id"]}, {"$set": update_fields})
+    updated = await db.users.find_one({"_id": user["_id"]})
+    return {"success": True, "user": serialize_doc(updated)}
+
+@api_router.post("/auth/logout")
+async def logout_session(authorization: Optional[str] = Header(None)):
+    if authorization and authorization.startswith("Bearer "):
+        token = authorization.split(" ", 1)[1].strip()
+        if token:
+            await db.user_sessions.delete_one({"session_token": token})
+    return {"success": True}
+
 
 # Magic WhatsApp Invite Link generator & resolver (The Remote Handshake)
 @api_router.post("/auth/create-magic-link")

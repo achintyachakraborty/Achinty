@@ -22,6 +22,10 @@
    store_name?: string;
    doctor_name?: string;
    department?: string;
+   email?: string;
+   picture?: string;
+   role_selected?: boolean;
+   auth_provider?: string;
  }
  
  export interface SideEffect {

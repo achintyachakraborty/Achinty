@@ -21,7 +21,7 @@
  }
  
  export const PasswordlessAuthModal = ({ visible, onClose }: PasswordlessAuthModalProps) => {
-   const { loginWithOtp, switchDemoUser, language, t } = useApp();
+   const { loginWithOtp, switchDemoUser, signInWithGoogle, language, t } = useApp();
    const [step, setStep] = useState<'phone' | 'otp'>('phone');
    const [phone, setPhone] = useState('+919876543210');
    const [otp, setOtp] = useState('123456');
@@ -89,6 +89,26 @@
            </View>
  
            <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+             {/* Continue with Google (Emergent-managed) */}
+             <TouchableOpacity
+               style={styles.googleButton}
+               testID="google-signin-button"
+               onPress={() => {
+                 onClose();
+                 signInWithGoogle();
+               }}
+               activeOpacity={0.8}
+             >
+               <Ionicons name="logo-google" size={18} color="#385A49" />
+               <Text style={styles.googleButtonText}>Continue with Google</Text>
+             </TouchableOpacity>
+
+             <View style={styles.dividerRow}>
+               <View style={styles.dividerLine} />
+               <Text style={styles.dividerText}>or</Text>
+               <View style={styles.dividerLine} />
+             </View>
+
              {/* Instant Quick Demo Profiles Bar */}
              <View style={styles.demoBox}>
                <Text style={styles.demoTitle}>⚡ Instant Demo Switcher</Text>
@@ -273,6 +293,37 @@
    content: {
      paddingVertical: 14,
      gap: 14
+   },
+   googleButton: {
+     minHeight: 50,
+     backgroundColor: '#FFFFFF',
+     borderRadius: 12,
+     borderWidth: 1.5,
+     borderColor: '#385A49',
+     flexDirection: 'row',
+     justifyContent: 'center',
+     alignItems: 'center',
+     gap: 10
+   },
+   googleButtonText: {
+     fontSize: 15,
+     fontWeight: '700',
+     color: '#385A49'
+   },
+   dividerRow: {
+     flexDirection: 'row',
+     alignItems: 'center',
+     gap: 10
+   },
+   dividerLine: {
+     flex: 1,
+     height: 1,
+     backgroundColor: '#E2DFD8'
+   },
+   dividerText: {
+     fontSize: 12,
+     fontWeight: '600',
+     color: '#8E8E93'
    },
    demoBox: {
      backgroundColor: '#F9FBF9',

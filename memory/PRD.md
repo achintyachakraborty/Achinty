@@ -23,6 +23,11 @@ Full-stack intelligent digital health platform to eliminate missed medications a
 - WCAG-minded UI: ≥48px touch targets, high-contrast clinical theme.
 
 ## Implemented (with dates)
+### 2026-08-29 (Google Sign-In)
+- **Emergent-managed Google OAuth** added (no API keys). Backend: `POST /api/auth/session` (exchange `session_id` via `X-Session-ID` → 7-day `session_token`, upsert user by email), `POST /api/auth/select-role`, `POST /api/auth/logout`, Bearer-token support on `GET /api/auth/me`, `user_sessions` collection + indexes (unique session_token, TTL on expires_at, sparse-unique users.email).
+- Frontend: Google auth integrated into `AppContext` (secure token storage via `@/src/utils/storage`, web hash/query + mobile `WebBrowser`/`Linking` redirect handling, session restore on mount, duplicate-`session_id` guard). "Continue with Google" button added to the login sheet (OTP + demo switcher kept). New `RoleSelectionModal` prompts first-time Google users to pick a role. Header shows Sign Out for Google users.
+- Verified end-to-end at API level: token→user (role_selected=false)→select-role→logout all correct.
+
 ### 2026-08-29 (later)
 - **Real prescription upload/scan**: Added "Upload Prescription Photo" (gallery) and "Take Photo with Camera" in the scanner, with contextual permission handling (request → denied → Open Settings) per best practices. Images are resized/compressed (`expo-image-manipulator`, max 1400px) then sent to GPT-4o Vision for OCR.
 - **Robust OCR**: Backend now extracts JSON reliably (fence-strip + regex fallback), and when a real photo can't be read it returns a clear "retake / add manually" message instead of silently showing demo meds. Verified GPT-4o correctly extracts drug/dosage/frequency from a legible Rx; sample-link path still returns the demo prescription.

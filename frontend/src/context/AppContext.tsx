@@ -1,5 +1,8 @@
- import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+ import React, { createContext, useContext, useState, useEffect, useRef, ReactNode } from 'react';
  import { Alert, Platform } from 'react-native';
+ import * as WebBrowser from 'expo-web-browser';
+ import * as Linking from 'expo-linking';
+ import { storage } from '@/src/utils/storage';
  import {
    UserProfile,
    UserRole,
@@ -13,6 +16,17 @@
  import { TRANSLATIONS } from '../localization/translations';
  
  const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || 'http://localhost:8001';
+
+ // Complete any pending auth session (mobile). No-op on web.
+ WebBrowser.maybeCompleteAuthSession();
+ const SESSION_TOKEN_KEY = 'rxsync_session_token';
+
+ // Emergent returns session_id in the hash fragment or query string.
+ const extractSessionId = (url: string | null): string | null => {
+   if (!url) return null;
+   const m = url.match(/[?#&]session_id=([^&#]+)/);
+   return m ? decodeURIComponent(m[1]) : null;
+ };
  
  interface AppContextType {
    user: UserProfile | null;
@@ -41,22 +55,28 @@
    createMagicInviteLink: (patientName: string) => Promise<{ code: string; magic_link: string; whatsapp_template: string }>;
    switchDemoUser: (targetRole: UserRole) => Promise<void>;
    loginWithOtp: (phone: string, otp: string, role?: UserRole) => Promise<boolean>;
+   signInWithGoogle: () => Promise<void>;
+   selectRole: (role: UserRole) => Promise<void>;
+   needRoleSelection: boolean;
+   authLoading: boolean;
    logout: () => void;
  }
  
  const AppContext = createContext<AppContextType | undefined>(undefined);
  
+ const DEFAULT_USER: UserProfile = {
+   id: 'patient_ramesh_001',
+   phone: '+919876543210',
+   name: 'Ramesh Sharma',
+   role: 'patient',
+   language: 'en',
+   age: 68,
+   gender: 'Male',
+   caregiver_id: 'caregiver_ananya_001'
+ };
+ 
  export const AppProvider = ({ children }: { children: ReactNode }) => {
-   const [user, setUser] = useState<UserProfile | null>({
-     id: 'patient_ramesh_001',
-     phone: '+919876543210',
-     name: 'Ramesh Sharma',
-     role: 'patient',
-     language: 'en',
-     age: 68,
-     gender: 'Male',
-     caregiver_id: 'caregiver_ananya_001'
-   });
+   const [user, setUser] = useState<UserProfile | null>(DEFAULT_USER);
    const [role, setRoleState] = useState<UserRole>('patient');
    const [language, setLanguageState] = useState<SupportedLanguage>('en');
    const [doses, setDoses] = useState<DoseItem[]>([]);
@@ -67,6 +87,10 @@
    const [interactions, setInteractions] = useState<DrugInteraction[]>([]);
    const [isLoading, setIsLoading] = useState<boolean>(false);
    const [healthStatus, setHealthStatus] = useState<'Well' | 'Unwell' | 'Unknown'>('Well');
+   const [authToken, setAuthToken] = useState<string | null>(null);
+   const [needRoleSelection, setNeedRoleSelection] = useState<boolean>(false);
+   const [authLoading, setAuthLoading] = useState<boolean>(false);
+   const processedSessionIds = useRef<Set<string>>(new Set());
  
    const t = TRANSLATIONS[language] || TRANSLATIONS.en;
  
@@ -321,10 +345,169 @@
      return false;
    };
  
-   const logout = () => {
-     setUser(null);
+   const exchangeSessionId = async (sessionId: string) => {
+     if (!sessionId || processedSessionIds.current.has(sessionId)) return;
+     processedSessionIds.current.add(sessionId);
+     try {
+       const res = await fetch(`${BACKEND_URL}/api/auth/session`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ session_id: sessionId })
+       });
+       if (res.ok) {
+         const data = await res.json();
+         if (data.session_token && data.user) {
+           await storage.secureSet(SESSION_TOKEN_KEY, data.session_token);
+           setAuthToken(data.session_token);
+           setUser(data.user);
+           setRoleState(data.user.role || 'patient');
+           setLanguageState(data.user.language || 'en');
+           setNeedRoleSelection(data.user.role_selected === false);
+         }
+       } else {
+         console.log('Session exchange failed:', res.status);
+       }
+     } catch (err) {
+       console.log('Session exchange error:', err);
+     }
    };
- 
+
+   const signInWithGoogle = async () => {
+     try {
+       const redirectUrl = Platform.OS === 'web'
+         ? (typeof window !== 'undefined' ? window.location.origin + '/' : '')
+         : Linking.createURL('');
+       const authUrl = `https://auth.emergentagent.com/?redirect=${encodeURIComponent(redirectUrl)}`;
+       if (Platform.OS === 'web') {
+         if (typeof window !== 'undefined') window.location.href = authUrl;
+         return;
+       }
+       const result = await WebBrowser.openAuthSessionAsync(authUrl, redirectUrl);
+       let callbackUrl: string | null = null;
+       if (result.type === 'success' && result.url) {
+         callbackUrl = result.url;
+       }
+       let sessionId = extractSessionId(callbackUrl);
+       if (!sessionId) {
+         const initial = await Linking.getInitialURL();
+         sessionId = extractSessionId(initial);
+       }
+       if (sessionId) {
+         await exchangeSessionId(sessionId);
+       }
+     } catch (err) {
+       console.log('Google sign-in error:', err);
+     }
+   };
+
+   const selectRole = async (newRole: UserRole) => {
+     try {
+       const res = await fetch(`${BACKEND_URL}/api/auth/select-role`, {
+         method: 'POST',
+         headers: {
+           'Content-Type': 'application/json',
+           ...(authToken ? { Authorization: `Bearer ${authToken}` } : {})
+         },
+         body: JSON.stringify({ role: newRole, language })
+       });
+       if (res.ok) {
+         const data = await res.json();
+         if (data.user) {
+           setUser(data.user);
+           setRoleState(data.user.role || newRole);
+         }
+       }
+     } catch (err) {
+       console.log('Select role error:', err);
+     } finally {
+       setNeedRoleSelection(false);
+     }
+   };
+
+   const loadStoredSession = async () => {
+     const token = await storage.secureGet(SESSION_TOKEN_KEY, null);
+     if (!token || typeof token !== 'string') return;
+     try {
+       const res = await fetch(`${BACKEND_URL}/api/auth/me`, {
+         headers: { Authorization: `Bearer ${token}` }
+       });
+       if (res.ok) {
+         const data = await res.json();
+         if (data.user && data.user.email) {
+           setAuthToken(token);
+           setUser(data.user);
+           setRoleState(data.user.role || 'patient');
+           setLanguageState(data.user.language || 'en');
+           if (data.user.role_selected === false) setNeedRoleSelection(true);
+         } else {
+           await storage.secureRemove(SESSION_TOKEN_KEY);
+         }
+       } else {
+         await storage.secureRemove(SESSION_TOKEN_KEY);
+       }
+     } catch (err) {
+       console.log('Session restore error:', err);
+     }
+   };
+
+   const logout = async () => {
+     try {
+       if (authToken) {
+         await fetch(`${BACKEND_URL}/api/auth/logout`, {
+           method: 'POST',
+           headers: { Authorization: `Bearer ${authToken}` }
+         });
+       }
+     } catch (err) {
+       console.log('Logout error:', err);
+     }
+     await storage.secureRemove(SESSION_TOKEN_KEY);
+     setAuthToken(null);
+     setNeedRoleSelection(false);
+     setUser(DEFAULT_USER);
+     setRoleState('patient');
+     setLanguageState('en');
+   };
+
+   // Bootstrap: process auth redirect / restore stored session on mount
+   useEffect(() => {
+     const bootstrap = async () => {
+       setAuthLoading(true);
+       if (Platform.OS === 'web' && typeof window !== 'undefined') {
+         const sid = extractSessionId(window.location.href);
+         if (sid) {
+           await exchangeSessionId(sid);
+           try {
+             const clean = window.location.href
+               .replace(/([?#&])session_id=[^&#]+/, '$1')
+               .replace(/[?#&]$/, '');
+             window.history.replaceState(window.history.state, '', clean);
+           } catch (e) { /* ignore */ }
+           setAuthLoading(false);
+           return;
+         }
+       } else {
+         const initial = await Linking.getInitialURL();
+         const sid = extractSessionId(initial);
+         if (sid) {
+           await exchangeSessionId(sid);
+           setAuthLoading(false);
+           return;
+         }
+       }
+       await loadStoredSession();
+       setAuthLoading(false);
+     };
+     bootstrap();
+
+     const sub = Linking.addEventListener('url', (event) => {
+       const sid = extractSessionId(event.url);
+       if (sid) exchangeSessionId(sid);
+     });
+     return () => sub.remove();
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, []);
+
    useEffect(() => {
      fetchTodayRoutine();
      fetchMedications();
@@ -362,6 +545,10 @@
          createMagicInviteLink,
          switchDemoUser,
          loginWithOtp,
+         signInWithGoogle,
+         selectRole,
+         needRoleSelection,
+         authLoading,
          logout
        }}
      >
