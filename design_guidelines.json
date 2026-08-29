@@ -1,0 +1,150 @@
+{
+  "app_name": "Rx Sync med reminder",
+  "personality": "1 iOS-Native Clean",
+  "personality_one_liner": "An intelligent digital health platform built with warm clinical clarity to eliminate missed medications and synchronize patient, caregiver, pharmacist, and clinic workflows.",
+  "color": {
+    "surface": "#F9F8F6",
+    "onSurface": "#1C1C1E",
+    "surfaceSecondary": "#FFFFFF",
+    "onSurfaceSecondary": "#3A3A3C",
+    "surfaceTertiary": "#EFECE6",
+    "onSurfaceTertiary": "#48484A",
+    "surfaceInverse": "#1C1C1E",
+    "onSurfaceInverse": "#F9F8F6",
+    "brand": "#385A49",
+    "brandPrimary": "#385A49",
+    "onBrandPrimary": "#FFFFFF",
+    "brandSecondary": "#D4835D",
+    "onBrandSecondary": "#FFFFFF",
+    "brandTertiary": "#E8ECE9",
+    "onBrandTertiary": "#233A30",
+    "success": "#2D6A4F",
+    "onSuccess": "#FFFFFF",
+    "warning": "#C17900",
+    "onWarning": "#FFFFFF",
+    "error": "#BA3C3C",
+    "onError": "#FFFFFF",
+    "info": "#2E5B88",
+    "onInfo": "#FFFFFF",
+    "border": "#E2DFD8",
+    "borderStrong": "#385A49",
+    "divider": "#EFECE6"
+  },
+  "typography": {
+    "displayFontFamily": "Satoshi",
+    "textFontFamily": "Geist",
+    "scale": {
+      "sm": 12,
+      "base": 14,
+      "lg": 16,
+      "xl": 20,
+      "2xl": 24
+    }
+  },
+  "spacing": {
+    "rule": "Maintain generous iOS-native vertical spacing with comfortable touch targets and clear grouping of related health items.",
+    "xs": 4,
+    "sm": 8,
+    "md": 12,
+    "lg": 16,
+    "xl": 24,
+    "2xl": 32,
+    "3xl": 48
+  },
+  "radius_tokens": {
+    "sm": 6,
+    "md": 12,
+    "lg": 20,
+    "pill": 999
+  },
+  "shadow_tier": "1",
+  "navigation": "bottom_tabs",
+  "icon_set": "Ionicons",
+  "glassmorphism": {
+    "enabled": "true",
+    "do's": [
+      "Use frosted glass for sticky headers over scrolling feeds",
+      "Apply glass blur to bottom tab bar and modal sheets"
+    ],
+    "dont's": [
+      "Never blur form inputs or body text regions",
+      "Avoid glass overlays on dense data tables where high contrast is mandatory"
+    ]
+  },
+  "platform_libraries": {
+    "glass": {
+      "ios": "expo-glass-effect",
+      "android": "expo-blur",
+      "low_end_android_fallback": "solid surfaceSecondary"
+    },
+    "image": "expo-image",
+    "blur": "expo-blur",
+    "bottom_sheet": "@gorhom/bottom-sheet",
+    "animation": "react-native-reanimated",
+    "gesture": "react-native-gesture-handler"
+  },
+  "screens": [
+    {
+      "name": "Auth & Onboarding",
+      "purpose": "Passwordless mobile OTP login, role selection (Patient, Caregiver, Pharmacist, Clinic), and vernacular language setup (English, Hindi, Bengali).",
+      "states": {
+        "loading": "Checking secure authentication status with pulse loader...",
+        "empty": "No previous login session found. Please enter mobile number to receive instant OTP.",
+        "error": "Invalid OTP code or network timeout. Please retry code dispatch."
+      },
+      "layout": "Centered clean iOS welcome hero with botanical medical emblem, role selector pills, language picker, and bottom-anchored OTP verification action."
+    },
+    {
+      "name": "Patient Routine",
+      "purpose": "Interactive daily medication timeline, meal rules (before/after food), 1-click health status check-in, and emergency SOS distress button.",
+      "states": {
+        "loading": "Synchronizing prescriptions and daily routines...",
+        "empty": "No active medication routines scheduled for today. Tap '+' to scan or add prescription.",
+        "error": "Failed to sync prescription schedule. Check connection and retry."
+      },
+      "layout": "Scrollable timeline with morning/afternoon/evening pill cards, meal rule badges, sticky 1-touch emergency SOS bar, and wellness check-in modal."
+    },
+    {
+      "name": "Vision AI Scanner",
+      "purpose": "Prescription OCR scanner with confidence scoring (<85% highlighted in red with mandatory verification), Step 3 verification form, and drug interaction check.",
+      "states": {
+        "loading": "Analyzing prescription handwriting & executing Vision AI OCR...",
+        "empty": "Position prescription in camera frame or tap to upload clear digital document.",
+        "error": "OCR confidence score below threshold or image too blurry. Please retake photo or use manual entry."
+      },
+      "layout": "Camera viewfinder with live bounding boxes, AI confidence score badge, extracted med item review list, and verification submit bar."
+    },
+    {
+      "name": "Drug Education & DDI",
+      "purpose": "Deep AI drug education, mechanism viewer, and cross-drug interaction safety screening (RxNorm/OpenFDA).",
+      "states": {
+        "loading": "Querying RxNorm and OpenFDA safety databases...",
+        "empty": "No medications selected for interaction screening.",
+        "error": "Database lookup timed out. Please check active medication list."
+      },
+      "layout": "Card-based safety matrix with severity indicator badges (green/yellow/red), detailed mechanism breakdown, and side-effect tier notes."
+    },
+    {
+      "name": "Caregiver & Pharmacist",
+      "purpose": "Remote caregiver dashboard with compliance scores & WhatsApp magic invite, plus pharmacist B2B 7-14 day refill queue.",
+      "states": {
+        "loading": "Fetching compliance metrics and refill queues...",
+        "empty": "No pending refill orders or caregiver links active.",
+        "error": "Unable to load pharmacy dispatch queue."
+      },
+      "layout": "Split-segment dashboard with caregiver compliance scorecards, WhatsApp invite dispatch buttons, and pharmacist 7-14 day refill batch manager."
+    }
+  ],
+  "images": {
+    "hero_medical": {
+      "url": "https://images.unsplash.com/photo-1580281657527-47f249e8f4df?q=80&w=1000&auto=format&fit=crop",
+      "dark": "https://images.unsplash.com/photo-1580281657527-47f249e8f4df?q=80&w=1000&auto=format&fit=crop",
+      "alt": "Professional clinical pharmacist managing medications"
+    },
+    "prescription_sample": {
+      "url": "https://images.pexels.com/photos/13060576/pexels-photo-13060576.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+      "alt": "Handwritten doctor prescription document sample"
+    }
+  },
+  "instructions_to_main_agent": "Ensure WCAG AAA accessibility across all screens with min 48px touch targets. Implement passwordless OTP login and vernacular support for English, Hindi, and Bengali. Enable Vision AI prescription scanner with confidence scoring (<85% red highlight) and Step 3 verification. Connect patient routines, caregiver compliance dashboard with WhatsApp magic link, pharmacist refill queue, and clinic DDI safety screening."
+}
