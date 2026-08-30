@@ -28,6 +28,17 @@
    auth_provider?: string;
  }
  
+ export interface ManualMedInput {
+   drug_name: string;
+   dosage: string;
+   form: string;
+   frequency: string;
+   timing_slots: string[];
+   exact_time: string;
+   meal_rule: string;
+   total_doses: number;
+ }
+ 
  export interface SideEffect {
    symptom: string;
    note: string;

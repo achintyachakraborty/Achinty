@@ -8,6 +8,7 @@
    UserRole,
    SupportedLanguage,
    DoseItem,
+   ManualMedInput,
    Medication,
    RefillOrder,
    DrugInteraction,
@@ -59,6 +60,11 @@
    selectRole: (role: UserRole) => Promise<void>;
    needRoleSelection: boolean;
    authLoading: boolean;
+   autoGenerateInvite: boolean;
+   clearAutoGenerateInvite: () => void;
+   addManualMedication: (payload: ManualMedInput) => Promise<boolean>;
+   updateProfile: (updates: { name?: string; language?: SupportedLanguage }) => Promise<boolean>;
+   linkPhone: (phone: string, otp: string) => Promise<{ ok: boolean; message?: string }>;
    logout: () => void;
  }
  
@@ -90,6 +96,7 @@
    const [authToken, setAuthToken] = useState<string | null>(null);
    const [needRoleSelection, setNeedRoleSelection] = useState<boolean>(false);
    const [authLoading, setAuthLoading] = useState<boolean>(false);
+   const [autoGenerateInvite, setAutoGenerateInvite] = useState<boolean>(false);
    const processedSessionIds = useRef<Set<string>>(new Set());
  
    const t = TRANSLATIONS[language] || TRANSLATIONS.en;
@@ -416,11 +423,76 @@
            setUser(data.user);
            setRoleState(data.user.role || newRole);
          }
+         if (newRole === 'caregiver') {
+           setAutoGenerateInvite(true);
+         }
        }
      } catch (err) {
        console.log('Select role error:', err);
      } finally {
        setNeedRoleSelection(false);
+     }
+   };
+
+   const clearAutoGenerateInvite = () => setAutoGenerateInvite(false);
+
+   const addManualMedication = async (payload: ManualMedInput): Promise<boolean> => {
+     const patientId = user?.role === 'patient' ? user.id : 'patient_ramesh_001';
+     try {
+       const res = await fetch(`${BACKEND_URL}/api/medications/add-manual`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify({ patient_id: patientId, ...payload })
+       });
+       if (res.ok) {
+         await fetchMedications();
+         await fetchTodayRoutine();
+         await checkInteractions();
+         return true;
+       }
+     } catch (err) {
+       console.log('Add manual medication error:', err);
+     }
+     return false;
+   };
+
+   const updateProfile = async (updates: { name?: string; language?: SupportedLanguage }): Promise<boolean> => {
+     if (!user) return false;
+     try {
+       const res = await fetch(`${BACKEND_URL}/api/auth/update-profile?user_id=${user.id}`, {
+         method: 'PUT',
+         headers: { 'Content-Type': 'application/json' },
+         body: JSON.stringify(updates)
+       });
+       if (res.ok) {
+         const data = await res.json();
+         if (data.user) setUser(data.user);
+         if (updates.language) setLanguageState(updates.language);
+         return true;
+       }
+     } catch (err) {
+       console.log('Update profile error:', err);
+     }
+     return false;
+   };
+
+   const linkPhone = async (phone: string, otp: string): Promise<{ ok: boolean; message?: string }> => {
+     if (!authToken) return { ok: false, message: 'Please sign in with Google first.' };
+     try {
+       const res = await fetch(`${BACKEND_URL}/api/auth/link-phone`, {
+         method: 'POST',
+         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authToken}` },
+         body: JSON.stringify({ phone, otp })
+       });
+       const data = await res.json();
+       if (res.ok && data.user) {
+         setUser(data.user);
+         return { ok: true };
+       }
+       return { ok: false, message: data.detail || 'Could not link number.' };
+     } catch (err) {
+       console.log('Link phone error:', err);
+       return { ok: false, message: 'Network error. Please try again.' };
      }
    };
 
@@ -549,6 +621,11 @@
          selectRole,
          needRoleSelection,
          authLoading,
+         autoGenerateInvite,
+         clearAutoGenerateInvite,
+         addManualMedication,
+         updateProfile,
+         linkPhone,
          logout
        }}
      >

@@ -344,6 +344,10 @@ class SelectRoleRequest(BaseModel):
     role: str
     language: Optional[str] = None
 
+class LinkPhoneRequest(BaseModel):
+    phone: str
+    otp: str
+
 class ManualMedicationCreate(BaseModel):
     patient_id: str
     prescription_id: Optional[str] = None
@@ -929,6 +933,21 @@ async def logout_session(authorization: Optional[str] = Header(None)):
         if token:
             await db.user_sessions.delete_one({"session_token": token})
     return {"success": True}
+
+@api_router.post("/auth/link-phone")
+async def link_phone(payload: LinkPhoneRequest, authorization: Optional[str] = Header(None)):
+    user = await get_user_from_token(authorization)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if payload.otp.strip() != "123456":
+        raise HTTPException(status_code=400, detail="Invalid OTP. Use 123456 for demo.")
+    phone = payload.phone.strip()
+    if not phone:
+        raise HTTPException(status_code=400, detail="Phone number is required")
+    await db.users.update_one({"_id": user["_id"]}, {"$set": {"phone": phone, "phone_linked": True}})
+    updated = await db.users.find_one({"_id": user["_id"]})
+    return {"success": True, "user": serialize_doc(updated)}
+
 
 
 # Magic WhatsApp Invite Link generator & resolver (The Remote Handshake)
