@@ -18,7 +18,9 @@ What's new in this version
 Environment variables (all optional unless marked)
 --------------------------------------------------
 MONGO_URL, DB_NAME, EMERGENT_LLM_KEY            as before
-SMS_GATEWAY_KEY        REQUIRED for SMS: secret that your Android app sends in the X-Device-Key header
+HTTPSMS_API_KEY        EASIEST SMS OPTION: API key from httpsms.com/settings (phone runs the free httpSMS app)
+HTTPSMS_FROM           your phone number as registered in the httpSMS app, e.g. +919876543210
+SMS_GATEWAY_KEY        only if you use the custom Android app instead: secret sent in the X-Device-Key header
 SMS_REDIRECT_TO        while testing, send ALL texts to this one number (e.g. your own number)
 DEMO_OTP_MODE          "true" (default) = OTP is always 123456; set "false" for real OTP over SMS
 ENABLE_SCHEDULER       "true" (default)
@@ -85,6 +87,8 @@ META_WHATSAPP_API_KEY = os.environ.get('META_WHATSAPP_API_KEY', '')
 # SMS gateway (your own phone)
 SMS_GATEWAY_KEY = os.environ.get('SMS_GATEWAY_KEY', '')
 SMS_REDIRECT_TO = os.environ.get('SMS_REDIRECT_TO', '').strip()
+HTTPSMS_API_KEY = os.environ.get('HTTPSMS_API_KEY', '').strip()   # if set, texts are sent through httpSMS
+HTTPSMS_FROM = os.environ.get('HTTPSMS_FROM', '').strip()
 SMS_MAX_ATTEMPTS = _env_int("SMS_MAX_ATTEMPTS", 3)
 SMS_CLAIM_TIMEOUT_SEC = _env_int("SMS_CLAIM_TIMEOUT_SEC", 120)
 
@@ -940,8 +944,6 @@ async def create_auth_indexes():
         # indexes that keep the scheduler and SMS queue fast
         await db.dose_logs.create_index([("date", 1), ("status", 1)])
         await db.sms_jobs.create_index([("status", 1), ("created_at", 1)])
-        logger.info("Indexes ensured.")
-    except Exception as idx_err:
         logger.warning(f"Index creation skipped: {idx_err}")
 
 
@@ -1806,19 +1808,74 @@ async def enqueue_sms(to_phone: Optional[str], message: str, patient_id: Optiona
 
     now_iso = now_utc().isoformat()
     job_id = str(uuid.uuid4())
-    await db.sms_jobs.insert_one({
+    job = {
         "_id": job_id,
         "to_phone": phone,
         "message": text,
-        "status": "queued",       # queued -> sending -> sent / failed
+        # httpSMS mode: we send it right now, so mark it 'sending' (the retry step skips it).
+        # Custom-app mode: it waits as 'queued' until the Android app picks it up.
+        "status": "sending" if HTTPSMS_API_KEY else "queued",   # queued -> sending -> sent / failed
         "attempts": 0,
         "patient_id": patient_id,
         "alert_type": alert_type,
         "dispatch_log_id": dispatch_log_id,
         "created_at": now_iso,
         "updated_at": now_iso,
-    })
-    return {"queued": True, "job_id": job_id, "to_phone": phone}
+    }
+    if HTTPSMS_API_KEY:
+        job["claimed_at"] = now_iso
+    await db.sms_jobs.insert_one(job)
+    status = await send_job_via_httpsms(job) if HTTPSMS_API_KEY else "queued"
+    return {"queued": True, "job_id": job_id, "to_phone": phone, "status": status}
+
+
+async def send_job_via_httpsms(job: Dict[str, Any]) -> str:
+    """Give one text to httpSMS; the httpSMS app on your phone then sends it from your SIM.
+    Returns 'sent' (accepted by httpSMS), 'queued' (failed, will retry) or 'failed' (gave up)."""
+    attempts = job.get("attempts", 0) + 1
+    error = None
+    try:
+        if not HTTPSMS_FROM:
+            raise RuntimeError("HTTPSMS_FROM is not set")
+        async with httpx.AsyncClient(timeout=15) as http:
+            resp = await http.post(
+                "https://api.httpsms.com/v1/messages/send",
+                headers={"x-api-key": HTTPSMS_API_KEY},
+                json={"from": normalize_phone(HTTPSMS_FROM), "to": job["to_phone"], "content": job["message"]},
+            )
+        if resp.status_code >= 300:
+            raise RuntimeError(f"httpSMS replied HTTP {resp.status_code}: {resp.text[:100]}")
+        new_status = "sent"
+    except Exception as e:
+        error = str(e)
+        logger.error(f"httpSMS send failed (attempt {attempts}): {error}")
+        new_status = "queued" if attempts < SMS_MAX_ATTEMPTS else "failed"
+
+    now_iso = now_utc().isoformat()
+    fields = {"status": new_status, "attempts": attempts, "error": error, "updated_at": now_iso}
+    if new_status == "sent":
+        fields["sent_at"] = now_iso
+    await db.sms_jobs.update_one({"_id": job["_id"]}, {"$set": fields})
+    if job.get("dispatch_log_id"):   # on the very first try the log does not exist yet; that is fine
+        await db.alert_dispatches.update_one(
+            {"_id": job["dispatch_log_id"]},
+            {"$set": {"delivery_status": "retrying" if new_status == "queued" else new_status}})
+    return new_status
+
+
+async def flush_queued_sms() -> int:
+    """httpSMS mode only: retry texts that could not be handed over earlier."""
+    if not HTTPSMS_API_KEY:
+        return 0
+    jobs = await db.sms_jobs.find({"status": "queued"}).sort("created_at", 1).to_list(20)
+    sent = 0
+    for job in jobs:
+        claimed = await db.sms_jobs.find_one_and_update(
+            {"_id": job["_id"], "status": "queued"},
+            {"$set": {"status": "sending", "claimed_at": now_utc().isoformat()}})
+        if claimed and await send_job_via_httpsms(claimed) == "sent":
+            sent += 1
+    return sent
 
 
 def require_gateway_key(x_device_key: Optional[str]) -> None:
@@ -1996,7 +2053,7 @@ async def execute_dispatch_alert(
             log_id = str(uuid.uuid4())
             res = await enqueue_sms(r["phone"], message, patient_id=patient_id,
                                     alert_type=alert_type, dispatch_log_id=log_id)
-            status = "queued" if res.get("queued") else res.get("reason", "not_queued")
+            status = res.get("status", "queued") if res.get("queued") else res.get("reason", "not_queued")
             log_doc = make_log("SMS", status, f"[SMS] {message}", recipient_role=r["role"],
                                recipient_phone=normalize_phone(r["phone"]), sms_job_id=res.get("job_id"))
             log_doc["_id"] = log_id
@@ -2199,68 +2256,4 @@ async def check_refills() -> int:
             {"medication_id": med["_id"], "status": {"$in": ["due_soon", "active_monitoring"]}})
         if order:
             await db.refill_orders.update_one({"_id": order["_id"]}, {"$set": {
-                "days_remaining": days_left, "urgency": urgency, "status": "due_soon",
-                "refill_due_date": refill_date, "updated_at": now_utc().isoformat()}})
-        else:
-            await db.refill_orders.insert_one({
-                "_id": str(uuid.uuid4()), "patient_id": med["patient_id"], "patient_name": name,
-                "patient_phone": (patient or {}).get("phone"), "medication_id": med["_id"],
-                "drug_name": f"{med.get('drug_name')} {med.get('dosage')}", "days_remaining": days_left,
-                "refill_due_date": refill_date, "urgency": urgency, "status": "due_soon",
-                "created_at": now_utc().isoformat()})
-
-        text = (f"Refill alert for {name}: {med.get('drug_name')} {med.get('dosage')} has about "
-                f"{days_left} day(s) of doses left. Please arrange a refill.")
-        try:
-            await execute_dispatch_alert(med["patient_id"], (patient or {}).get("caregiver_id"),
-                                         "Refill_Notice", "SMS", text, name)
-            await db.medications.update_one({"_id": med["_id"]}, {"$set": {"last_refill_alert_date": today}})
-            alerts += 1
-        except Exception as e:
-            logger.error(f"Refill alert failed for {med['_id']}: {e}")
-    return alerts
-
-
-async def rollover_old_pending_doses() -> int:
-    """Doses from before yesterday that were never confirmed become 'missed'."""
-    cutoff = _recent_dates()[1]
-    res = await db.dose_logs.update_many(
-        {"status": "pending", "date": {"$lt": cutoff}},
-        {"$set": {"status": "missed", "missed_at": now_utc().isoformat()}})
-    return res.modified_count
-
-
-async def scheduler_tick() -> Dict[str, Any]:
-    now = now_ist()
-    today = now.strftime("%Y-%m-%d")
-    result: Dict[str, Any] = {}
-
-    async def step(name: str, coro):
-        try:
-            result[name] = await coro
-        except Exception as e:      # one failing step must not stop the others
-            logger.exception(f"Scheduler step '{name}' failed")
-            result[name] = f"error: {e}"
-
-    if scheduler_state["last_generated_date"] != today:
-        await step("doses_created", generate_daily_doses(today))
-        scheduler_state["last_generated_date"] = today
-    await step("reminders", send_due_reminders())
-    await step("missed_alerts", send_missed_dose_alerts())
-    await step("sms_requeued", requeue_stale_sms_jobs())
-    if now.hour >= REFILL_CHECK_HOUR_IST and scheduler_state["last_refill_check_date"] != today:
-        await step("refill_alerts", check_refills())
-        scheduler_state["last_refill_check_date"] = today
-    await step("rolled_over", rollover_old_pending_doses())
-    return result
-
-
-async def scheduler_loop():
-    scheduler_state["running"] = True
-    logger.info(f"Scheduler started (every {SCHEDULER_INTERVAL_SEC}s, India time).")
-    try:
-        while True:
-            try:
-                scheduler_state["last_result"] = await scheduler_tick()
-                scheduler_state["last_error"] = None
-           
+                "days_remaining": days_left, "urgency": urgenc
